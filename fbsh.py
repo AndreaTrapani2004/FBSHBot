@@ -1,8 +1,8 @@
 """
-live_goals_bot.py
+fbsh.py
 Bot Telegram per notifiche 1-1 live in tutti i campionati
 Monitora partite live tramite API SofaScore
-Traccia partite in stato 1-0/0-1 e notifica quando diventano 1-1 entro 10 minuti
+Traccia partite in stato 1-0/0-1 a fine primo tempo e notifica quando diventano 1-1 entro 55' minuto
 """
 
 import time
@@ -462,7 +462,8 @@ def send_message(home, away, league, country, first_score, first_min, second_sco
         f"{header}\n"
         f"{reliability_str}\n"
         f"{first_score} ; {first_min}'\n"
-           f"{second_score} ; {second_min}'"
+        f"{second_score} ; {second_min}'\n"
+        f"⚽ GOL FBSH"
     )
     bot.send_message(chat_id=CHAT_ID, text=text)
     
@@ -473,15 +474,31 @@ def send_message(home, away, league, country, first_score, first_min, second_sco
 
 
 def cleanup_expired_matches(active_matches, current_matches_dict):
-    """Rimuove partite scadute (>10 minuti di gioco dal primo gol)"""
+    """Rimuove partite scadute:
+    - Partite 0-0 dopo la fine del primo tempo (se non sono diventate 1-0/0-1)
+    - Partite 1-0/0-1 dopo il 55' minuto (se non sono diventate 1-1)
+    """
     expired = []
     
     for match_id, match_data in active_matches.items():
-        # Le partite 0-0 tracciate non scadono, rimangono tracciate finché non cambiano punteggio
+        # CASO 1: Partite 0-0 - rimuovi se il primo tempo è finito
         if match_data.get("score") == "0-0":
-            continue  # Non rimuovere partite 0-0
+            if match_id in current_matches_dict:
+                live_match = current_matches_dict[match_id]
+                period = live_match.get("period")
+                minute = live_match.get("minute")
+                status_type = (live_match.get("status_type") or "").lower()
+                
+                # Se è finito il primo tempo (period >= 2 o minuto > 45) e ancora 0-0, rimuovi
+                if period and period >= 2:
+                    expired.append(match_id)
+                elif minute is not None and minute > 45:
+                    expired.append(match_id)
+                elif status_type in ("halftime", "break"):
+                    expired.append(match_id)
+            continue
         
-        # Solo le partite con primo gol (1-0/0-1) possono scadere
+        # CASO 2: Partite 1-0/0-1 - rimuovi se siamo oltre il 55' minuto
         first_goal_minute = match_data.get("first_goal_minute", 0)
         if first_goal_minute == 0:
             continue  # Se non c'è minuto del primo gol, non scadere
@@ -489,18 +506,16 @@ def cleanup_expired_matches(active_matches, current_matches_dict):
         # Cerca la partita nelle partite live attuali per ottenere il minuto corrente
         if match_id in current_matches_dict:
             current_minute = current_matches_dict[match_id].get("minute")
-            if current_minute is not None and current_minute > 0:
-                # Calcola differenza in minuti di gioco
-                elapsed_game_minutes = current_minute - first_goal_minute
-                if elapsed_game_minutes > 10:
-                    expired.append(match_id)
+            if current_minute is not None and current_minute > 55:
+                # Siamo oltre il 55' minuto, rimuovi
+                expired.append(match_id)
         else:
             # Se la partita non è più nelle partite live, rimuovila dopo un timeout
             first_goal_time = match_data.get("first_goal_time")
             if first_goal_time:
                 now = datetime.now()
                 elapsed = (now - first_goal_time).total_seconds() / 60
-                if elapsed > 15:  # Timeout più lungo per sicurezza
+                if elapsed > 20:  # Timeout più lungo per sicurezza
                     expired.append(match_id)
     
     for match_id in expired:
@@ -727,8 +742,62 @@ def process_matches():
         match_id = get_match_id(match["home"], match["away"], match["league"])
         current_matches_dict[match_id] = match
     
-    # Rimuovi partite scadute (>10 minuti di gioco)
+    # Rimuovi partite scadute
     active_matches = cleanup_expired_matches(active_matches, current_matches_dict)
+    
+    # Verifica che le partite 1-0/0-1 tracciate abbiano finito il primo tempo con risultato 1-0/0-1
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.sofascore.com/",
+        "Origin": "https://www.sofascore.com"
+    }
+    
+    # Verifica risultato primo tempo per partite tracciate 1-0/0-1
+    matches_to_remove = []
+    for match_id, match_data in active_matches.items():
+        # Solo per partite 1-0/0-1 (non 0-0)
+        if "first_score" not in match_data:
+            continue
+        
+        event_id = match_data.get("event_id")
+        if not event_id:
+            continue
+        
+        live_match = current_matches_dict.get(match_id)
+        if not live_match:
+            continue
+        
+        period = live_match.get("period")
+        minute = live_match.get("minute")
+        status_type = (live_match.get("status_type") or "").lower()
+        
+        # Verifica se il primo tempo è finito
+        halftime_finished = False
+        if period and period >= 2:
+            halftime_finished = True
+        elif minute is not None and minute > 45:
+            halftime_finished = True
+        elif status_type in ("halftime", "break"):
+            halftime_finished = True
+        
+        if halftime_finished:
+            # Recupera risultato primo tempo
+            result_1h, _ = get_scores_from_incidents(event_id, headers)
+            if result_1h:
+                # Verifica che il risultato del primo tempo sia 1-0 o 0-1
+                if result_1h not in ["1-0", "0-1"]:
+                    # Il primo tempo non è finito 1-0/0-1, rimuovi
+                    matches_to_remove.append(match_id)
+                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    print(f"[{now_utc}] ⚠️ Partita rimossa: {match_data.get('home')} - {match_data.get('away')} - primo tempo finito {result_1h} (non 1-0/0-1)")
+                    sys.stdout.flush()
+    
+    # Rimuovi partite che non rispettano i criteri
+    for match_id in matches_to_remove:
+        if match_id in active_matches:
+            del active_matches[match_id]
     
     now = datetime.now()
     
@@ -747,19 +816,23 @@ def process_matches():
         if match_id in sent_matches:
             continue
         
-        # CASO 0: Traccia partite 0-0 per rilevare quando diventano 1-0/0-1
+        # CASO 0: Traccia partite 0-0 SOLO fino alla fine del primo tempo
         if score_home == 0 and score_away == 0:
-            if match_id not in active_matches:
-                # Traccia partita 0-0 per rilevare quando diventa 1-0/0-1
-                active_matches[match_id] = {
-                    "home": home,
-                    "away": away,
-                    "league": league,
-                    "country": country,
-                    "score": "0-0",
-                    "last_minute": minute if minute is not None else 0,
-                    "last_period": match.get("period")
-                }
+            period = match.get("period")
+            # Traccia solo se siamo ancora nel primo tempo (period == 1 o minuto <= 45)
+            if period == 1 or (minute is not None and minute <= 45):
+                if match_id not in active_matches:
+                    # Traccia partita 0-0 per rilevare quando diventa 1-0/0-1
+                    active_matches[match_id] = {
+                        "home": home,
+                        "away": away,
+                        "league": league,
+                        "country": country,
+                        "score": "0-0",
+                        "last_minute": minute if minute is not None else 0,
+                        "last_period": period,
+                        "event_id": match.get("event_id")
+                    }
         
         # CASO 1: Partita passa da 0-0 a 1-0 o 0-1 (gol appena segnato!)
         elif (score_home == 1 and score_away == 0) or (score_home == 0 and score_away == 1):
@@ -769,6 +842,23 @@ def process_matches():
                 if match_data.get("score") == "0-0":
                     first_score = "1-0" if score_home == 1 else "0-1"
                     period = match.get("period")  # 1 = primo tempo, 2 = secondo tempo
+                    
+                    # IMPORTANTE: Il gol deve essere nel primo tempo (period == 1 o minuto <= 45)
+                    if period and period > 1:
+                        # Gol nel secondo tempo, non tracciare
+                        del active_matches[match_id]
+                        now_utc = datetime.utcnow().isoformat() + "Z"
+                        print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol nel secondo tempo")
+                        sys.stdout.flush()
+                        continue
+                    
+                    if minute is not None and minute > 45:
+                        # Gol dopo il 45', non tracciare
+                        del active_matches[match_id]
+                        now_utc = datetime.utcnow().isoformat() + "Z"
+                        print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol dopo il 45'")
+                        sys.stdout.flush()
+                        continue
                     
                     # Il minuto del gol è il minuto corrente (o poco prima, massimo 1 minuto)
                     goal_minute = minute if minute is not None else 0
@@ -786,7 +876,8 @@ def process_matches():
                         "first_score": first_score,
                         "first_goal_minute": goal_minute,
                         "first_goal_period": period,
-                        "first_goal_reliability": match.get("reliability", 4)  # Attendibilità alta perché rilevato al momento
+                        "first_goal_reliability": match.get("reliability", 4),  # Attendibilità alta perché rilevato al momento
+                        "event_id": match.get("event_id")
                     }
                     now_utc = datetime.utcnow().isoformat() + "Z"
                     print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} (0-0 → {first_score}) al minuto {goal_minute}' - ESATTO (rilevato al momento)")
@@ -822,35 +913,16 @@ def process_matches():
                 
                 second_period = match.get("period")  # Metà tempo corrente
                 
-                # VERIFICA: Entrambi i gol devono essere nella stessa metà tempo
-                same_period = True
-                if first_period is not None and second_period is not None:
-                    same_period = (first_period == second_period)
-                elif first_min > 0 and second_min > 0:
-                    # Fallback: determina metà tempo dal minuto
-                    first_is_first_half = (first_min <= 45)
-                    second_is_first_half = (second_min <= 45)
-                    same_period = (first_is_first_half == second_is_first_half)
-                
-                if not same_period:
-                    # Gol in metà tempo diverse, non notificare
-                    del active_matches[match_id]
-                    print(f"Partita scartata (gol in metà tempo diverse): {home} - {away} ({first_score} al {first_min}' → 1-1 al {second_min}')")
-                    continue
-                
-                # Calcola differenza in minuti di gioco
-                if first_min > 0 and second_min > 0:
-                    elapsed_game_minutes = second_min - first_min
-                else:
-                    # Se non abbiamo minuti, non notificare
+                # Se non abbiamo minuti, non notificare
+                if first_min == 0 or second_min == 0:
                     now_utc = datetime.utcnow().isoformat() + "Z"
                     print(f"[{now_utc}] ⚠️ Notifica NON inviata: {home} - {away} ({first_score} → 1-1) - minuti non disponibili (first_min={first_min}, second_min={second_min})")
                     sys.stdout.flush()
                     del active_matches[match_id]
                     continue
                 
-                # Se è diventata 1-1 entro 10 minuti di gioco E stessa metà tempo, invia notifica
-                if elapsed_game_minutes <= 10 and elapsed_game_minutes >= 0:
+                # NUOVA LOGICA: Controlla che l'1-1 sia entro il 55' minuto (non più 10 minuti di gioco)
+                if second_min <= 55:
                     # Calcola attendibilità combinata (minimo tra i due)
                     first_reliability = match_data.get("first_goal_reliability", 0)
                     combined_reliability = min(first_reliability, second_goal_reliability)
@@ -872,28 +944,48 @@ def process_matches():
                     del active_matches[match_id]
                     # Entrambi i minuti sono esatti perché rilevati al momento (0-0 → 1-0/0-1 e 1-0/0-1 → 1-1)
                     now_utc = datetime.utcnow().isoformat() + "Z"
-                    print(f"[{now_utc}] ✅ Notifica inviata: {home} - {away} ({first_score} al {first_min}' [ESATTO] → 1-1 al {second_min}' [ESATTO]) - {elapsed_game_minutes:.1f} min di gioco (stessa metà tempo, attendibilità {combined_reliability}/5)")
+                    print(f"[{now_utc}] ✅ Notifica inviata: {home} - {away} ({first_score} al {first_min}' [ESATTO] → 1-1 al {second_min}' [ESATTO]) - entro il 55' minuto (attendibilità {combined_reliability}/5)")
                     sys.stdout.flush()
                 else:
-                    # Scaduta, rimuovi dal tracking
+                    # Scaduta (oltre il 55' minuto), rimuovi dal tracking
                     del active_matches[match_id]
-                    print(f"Partita scaduta (>{elapsed_game_minutes:.1f} min di gioco): {home} - {away}")
+                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    print(f"[{now_utc}] ⚠️ Partita scaduta (oltre il 55' minuto): {home} - {away} (1-1 al {second_min}')")
+                    sys.stdout.flush()
         
         # CASO 3: Partita tracciata che cambia punteggio in modo non interessante
         elif match_id in active_matches:
             match_data = active_matches[match_id]
+            period = match.get("period")
+            
             # Se era 0-0 e ora non è più 0-0 e non è 1-0/0-1, rimuovila
             if match_data.get("score") == "0-0":
-                # Era 0-0, ora è cambiata ma non è 1-0/0-1 (es. 2-0, 0-2, 1-1, ecc.)
-                del active_matches[match_id]
-                now_utc = datetime.utcnow().isoformat() + "Z"
-                print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era 0-0, ora {score_home}-{score_away})")
-                sys.stdout.flush()
+                # IMPORTANTE: Se siamo ancora nel primo tempo e la partita è diventata 1-0/0-1, 
+                # questo caso non dovrebbe mai verificarsi (gestito nel CASO 1)
+                # Se la partita è diventata qualcos'altro (2-0, 0-2, 1-1, ecc.) nel primo tempo, rimuovila
+                if period == 1 or (minute is not None and minute <= 45):
+                    # Era 0-0, ora è cambiata ma non è 1-0/0-1 (es. 2-0, 0-2, 1-1, ecc.) nel primo tempo
+                    del active_matches[match_id]
+                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era 0-0, ora {score_home}-{score_away}) - altro gol nel primo tempo")
+                    sys.stdout.flush()
             # Se era 1-0/0-1 e ora non è più 1-0/0-1 e non è 1-1, rimuovila
             elif "first_score" in match_data:
                 # Era 1-0/0-1, ora è cambiata ma non è 1-1 (es. 2-0, 0-2, 2-1, ecc.)
-                del active_matches[match_id]
-                print(f"Partita rimossa dal tracking (punteggio cambiato): {home} - {away} (era {match_data.get('first_score')}, ora {score_home}-{score_away})")
+                # IMPORTANTE: Se era 1-0/0-1 e nel primo tempo fanno un altro gol (es. 2-0, 0-2), rimuovila
+                first_period = match_data.get("first_goal_period")
+                if first_period == 1 and (period == 1 or (minute is not None and minute <= 45)):
+                    # Primo gol nel primo tempo, e ora c'è un altro gol sempre nel primo tempo
+                    del active_matches[match_id]
+                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era {match_data.get('first_score')}, ora {score_home}-{score_away}) - altro gol nel primo tempo")
+                    sys.stdout.flush()
+                elif score_home != 1 or score_away != 1:
+                    # Non è più 1-1 e non è più 1-0/0-1, rimuovila
+                    del active_matches[match_id]
+                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era {match_data.get('first_score')}, ora {score_home}-{score_away})")
+                    sys.stdout.flush()
     
     # Aggiorna risultati salvati e persisti stato
     update_results_for_sent_matches(sent_matches, current_matches_dict)
@@ -918,9 +1010,10 @@ def cmd_start(update, context):
         "👋 Benvenuto in QrGolBot!\n\n"
         "⚽ Bot per notifiche 1-1 Live\n\n"
         "Il bot monitora tutte le partite live da SofaScore e ti avvisa quando:\n"
-        "• Una partita è 1-0 o 0-1\n"
-        "• Diventa 1-1 entro 10 minuti di gioco\n"
-        "• Entrambi i gol sono nella stessa metà tempo\n\n"
+        "• Una partita è 0-0 nel primo tempo\n"
+        "• Diventa 1-0 o 0-1 nel primo tempo\n"
+        "• Il primo tempo finisce 1-0 o 0-1\n"
+        "• Diventa 1-1 entro il 55' minuto\n\n"
         "📊 Sistema di Attendibilità (0-5):\n"
         "❌ 0: Nessun dato disponibile\n"
         "⚠️ 1-2: Dati parziali o calcolati\n"
@@ -944,10 +1037,11 @@ def cmd_help(update, context):
         "⚽ QrGolBot - Notifiche 1-1 Live\n\n"
         "Cosa fa: Monitora tutte le partite live (SofaScore) e invia notifiche "
         "quando il punteggio diventa 1-1 con questi criteri:\n"
-        "• Partita era 1-0 o 0-1\n"
-        "• Diventa 1-1 entro 10 minuti di gioco dal primo gol\n"
-        "• Entrambi i gol nella stessa metà tempo (1H o 2H)\n"
-        "• Squadre opposte\n\n"
+        "• Traccia partite 0-0 fino alla fine del primo tempo\n"
+        "• Diventa 1-0 o 0-1 nel primo tempo\n"
+        "• Il primo tempo deve finire 1-0 o 0-1\n"
+        "• Diventa 1-1 entro il 55' minuto\n"
+        "• Notifica con 'GOL FBSH'\n\n"
         "📊 Sistema di Attendibilità (0-5):\n"
         "Ogni notifica include un indicatore di attendibilità:\n"
         "❌ 0: Nessun dato minuto disponibile\n"
@@ -959,12 +1053,17 @@ def cmd_help(update, context):
         "/ping - Verifica se il bot è attivo\n"
         "/help - Questa guida\n"
         "/status - Stato ultimo check, errori, statistiche\n"
+        "/info - Informazioni dettagliate sul bot\n"
+        "/chatid - Mostra l'ID della chat corrente\n"
         "/live - Elenco partite live rilevanti (1-0/0-1/1-1)\n"
         "/see_all_games - Tutte le partite trovate\n"
         "/active - Partite attualmente in tracking (1-0/0-1)\n"
         "/interested - Partite che sono state notificate (reportate)\n"
         "/stats - Statistiche notifiche (ultimi 7 giorni)\n"
-        "/excel - Scarica Excel completo con risultati e minuti"
+        "/excel - Scarica Excel completo con risultati e minuti\n"
+        "/logs - Mostra ultimi log del bot\n"
+        "/clear - Pulisce partite in tracking\n"
+        "/reset - Resetta tutte le partite notificate"
     )
     update.effective_message.reply_text(help_text)
 
@@ -1270,6 +1369,93 @@ def cmd_stats(update, context):
     update.effective_message.reply_text("\n".join(lines))
 
 
+def cmd_chatid(update, context):
+    """Mostra l'ID della chat corrente"""
+    chat = update.effective_chat
+    message = (
+        f"📱 Informazioni Chat:\n\n"
+        f"🆔 Chat ID: `{chat.id}`\n"
+        f"📝 Tipo: {chat.type}\n"
+    )
+    
+    if chat.title:
+        message += f"📌 Titolo: {chat.title}\n"
+    if chat.username:
+        message += f"👤 Username: @{chat.username}\n"
+    if chat.first_name:
+        message += f"👤 Nome: {chat.first_name}\n"
+    if chat.last_name:
+        message += f"👤 Cognome: {chat.last_name}\n"
+    
+    message += f"\n💡 Usa questo ID nella variabile d'ambiente CHAT_ID"
+    
+    update.effective_message.reply_text(message, parse_mode='Markdown')
+
+
+def cmd_info(update, context):
+    """Mostra informazioni dettagliate sul bot"""
+    from telegram import __version__ as telegram_version
+    
+    info_text = (
+        f"🤖 Informazioni Bot:\n\n"
+        f"📦 Versione Python: {sys.version.split()[0]}\n"
+        f"📦 Versione python-telegram-bot: {telegram_version}\n"
+        f"⚙️ Intervallo polling: {POLL_INTERVAL} secondi\n"
+        f"🌐 API SofaScore: {SOFASCORE_PROXY_BASE}\n\n"
+        f"📊 Statistiche:\n"
+        f"• Totale notifiche: {total_notifications_sent}\n"
+        f"• Partite in tracking: {len(load_active_matches())}\n"
+        f"• Partite notificate: {len(load_sent_matches())}\n\n"
+        f"🆔 Chat ID corrente: {update.effective_chat.id}\n"
+        f"👤 User ID: {update.effective_user.id if update.effective_user else 'N/A'}"
+    )
+    update.effective_message.reply_text(info_text)
+
+
+def cmd_clear(update, context):
+    """Pulisce le partite in tracking (ATTENZIONE: azione irreversibile)"""
+    active_matches = load_active_matches()
+    count = len(active_matches)
+    
+    if count == 0:
+        update.effective_message.reply_text("Nessuna partita in tracking da rimuovere.")
+        return
+    
+    # Pulisci
+    active_matches = {}
+    save_active_matches(active_matches)
+    
+    update.effective_message.reply_text(f"✅ Rimosse {count} partite dal tracking.")
+
+
+def cmd_reset(update, context):
+    """Resetta tutte le partite notificate (ATTENZIONE: azione irreversibile)"""
+    sent_matches = load_sent_matches()
+    count = len(sent_matches)
+    
+    if count == 0:
+        update.effective_message.reply_text("Nessuna partita notificata da resettare.")
+        return
+    
+    # Reset
+    sent_matches = {}
+    save_sent_matches(sent_matches)
+    
+    update.effective_message.reply_text(f"✅ Reset completato: rimosse {count} partite notificate.")
+
+
+def cmd_logs(update, context):
+    """Mostra gli ultimi log del bot (se disponibili)"""
+    # Questo comando può essere esteso per leggere da un file di log
+    update.effective_message.reply_text(
+        "📋 Logs:\n\n"
+        f"Ultimo check start: {last_check_started_at.strftime('%H:%M:%S') if last_check_started_at else 'N/A'}\n"
+        f"Ultimo check end: {last_check_finished_at.strftime('%H:%M:%S') if last_check_finished_at else 'N/A'}\n"
+        f"Ultimo errore: {last_check_error if last_check_error else 'Nessuno'}\n\n"
+        f"💡 Per log completi, controlla i log del server."
+    )
+
+
 def cmd_excel(update, context):
     """Genera e invia un file Excel con tutte le partite notificate"""
     try:
@@ -1418,6 +1604,8 @@ def setup_telegram_commands():
         dp.add_handler(CommandHandler("ping", cmd_ping))
         dp.add_handler(CommandHandler("help", cmd_help))
         dp.add_handler(CommandHandler("status", cmd_status))
+        dp.add_handler(CommandHandler("info", cmd_info))
+        dp.add_handler(CommandHandler("chatid", cmd_chatid))
         dp.add_handler(CommandHandler("live", cmd_live))
         dp.add_handler(CommandHandler("see_all_games", cmd_see_all_games))
         dp.add_handler(CommandHandler("active", cmd_active))
@@ -1425,6 +1613,9 @@ def setup_telegram_commands():
         dp.add_handler(CommandHandler("reported", cmd_interested))  # Alias
         dp.add_handler(CommandHandler("stats", cmd_stats))
         dp.add_handler(CommandHandler("excel", cmd_excel))
+        dp.add_handler(CommandHandler("logs", cmd_logs))
+        dp.add_handler(CommandHandler("clear", cmd_clear))
+        dp.add_handler(CommandHandler("reset", cmd_reset))
         
         # Gestione comandi nei canali
         def handle_channel_command(update, context):
@@ -1448,6 +1639,10 @@ def setup_telegram_commands():
                 cmd_help(update, context)
             elif cmd == "status":
                 cmd_status(update, context)
+            elif cmd == "info":
+                cmd_info(update, context)
+            elif cmd == "chatid":
+                cmd_chatid(update, context)
             elif cmd == "live":
                 cmd_live(update, context)
             elif cmd == "see_all_games":
@@ -1458,6 +1653,12 @@ def setup_telegram_commands():
                 cmd_stats(update, context)
             elif cmd == "excel":
                 cmd_excel(update, context)
+            elif cmd == "logs":
+                cmd_logs(update, context)
+            elif cmd == "clear":
+                cmd_clear(update, context)
+            elif cmd == "reset":
+                cmd_reset(update, context)
         
         dp.add_handler(MessageHandler(Filters.update.channel_posts, handle_channel_command))
         
