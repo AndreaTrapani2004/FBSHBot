@@ -459,11 +459,14 @@ def send_message(home, away, league, country, first_score, first_min, second_sco
         league_str += f" - {country}"
     
     # Costruisci messaggio
+    # Gestisci caso minuto primo gol non disponibile
+    first_min_str = f"{first_min}'" if first_min and first_min > 0 else "N/A"
+    
     message = f"⚽ GOL FBSH\n\n"
     message += f"🏠 {home}\n"
     message += f"🆚 {away}\n"
     message += f"📊 {league_str}\n"
-    message += f"⏱️ Minuto {first_score} ; {first_min}'\n"
+    message += f"⏱️ Minuto {first_score} ; {first_min_str}\n"
     message += f"⏱️ Minuto {second_score} ; {second_min}'\n"
     
     if match_url:
@@ -493,10 +496,11 @@ def cleanup_expired_matches(active_matches, current_matches_dict):
                 minute = live_match.get("minute")
                 status_type = (live_match.get("status_type") or "").lower()
                 
-                # Se è finito il primo tempo (period >= 2 o minuto > 45) e ancora 0-0, rimuovi
+                # Se è finito il primo tempo (period >= 2 o minuto > 45 come fallback) e ancora 0-0, rimuovi
                 if period and period >= 2:
                     expired.append(match_id)
                 elif minute is not None and minute > 45:
+                    # Fallback conservativo: se minuto > 45 e non abbiamo period, assumiamo secondo tempo
                     expired.append(match_id)
                 elif status_type in ("halftime", "break"):
                     expired.append(match_id)
@@ -820,11 +824,20 @@ def process_matches():
         if match_id in sent_matches:
             continue
         
-        # CASO 0: Traccia partite 0-0 SOLO fino alla fine del primo tempo
+        # CASO 0: Traccia partite 0-0 SOLO fino alla fine del primo tempo (include recupero)
         if score_home == 0 and score_away == 0:
             period = match.get("period")
-            # Traccia solo se siamo ancora nel primo tempo (period == 1 o minuto <= 45)
-            if period == 1 or (minute is not None and minute <= 45):
+            # Traccia solo se siamo ancora nel primo tempo
+            # Se period è disponibile, usa quello (include recupero)
+            # Altrimenti usa minuto <= 45 come fallback conservativo
+            is_first_half = False
+            if period == 1:
+                is_first_half = True
+            elif minute is not None and minute <= 45:
+                # Fallback: assumiamo primo tempo se minuto <= 45
+                is_first_half = True
+            
+            if is_first_half:
                 if match_id not in active_matches:
                     # Traccia partita 0-0 per rilevare quando diventa 1-0/0-1
                     active_matches[match_id] = {
@@ -847,20 +860,22 @@ def process_matches():
                     first_score = "1-0" if score_home == 1 else "0-1"
                     period = match.get("period")  # 1 = primo tempo, 2 = secondo tempo
                     
-                    # IMPORTANTE: Il gol deve essere nel primo tempo (period == 1 o minuto <= 45)
-                    if period and period > 1:
-                        # Gol nel secondo tempo, non tracciare
+                    # IMPORTANTE: Il gol deve essere nel primo tempo (include recupero)
+                    # Se period è disponibile, usa quello (più affidabile, include il recupero)
+                    if period:
+                        if period > 1:
+                            # Gol nel secondo tempo, non tracciare
+                            del active_matches[match_id]
+                            now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
+                            print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol nel secondo tempo")
+                            sys.stdout.flush()
+                            continue
+                        # Se period == 1, siamo nel primo tempo (anche con recupero), OK
+                    elif minute is not None and minute > 45:
+                        # Se period non disponibile, usa il minuto come fallback conservativo
                         del active_matches[match_id]
                         now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                        print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol nel secondo tempo")
-                        sys.stdout.flush()
-                        continue
-                    
-                    if minute is not None and minute > 45:
-                        # Gol dopo il 45', non tracciare
-                        del active_matches[match_id]
-                        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                        print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol dopo il 45'")
+                        print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - probabilmente nel secondo tempo (minuto {minute}')")
                         sys.stdout.flush()
                         continue
                     
@@ -888,11 +903,68 @@ def process_matches():
                     sys.stdout.flush()
             elif match_id not in active_matches:
                 # Partita già 1-0/0-1 quando viene rilevata (non era tracciata come 0-0)
-                # Non possiamo sapere il minuto esatto, quindi non tracciarla
+                # Tracciala se il gol è nel primo tempo (non serve il minuto esatto)
                 now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                 first_score = "1-0" if score_home == 1 else "0-1"
-                minute_str = f"minuto rilevato: {minute}'" if minute is not None else "minuto non disponibile"
-                print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - già in corso quando rilevata ({minute_str}, minuto esatto non disponibile)")
+                period = match.get("period")
+                event_id = match.get("event_id")
+                
+                # Verifica che il gol sia nel primo tempo
+                # Se period è disponibile, usa quello (più affidabile, include il recupero)
+                if period:
+                    if period > 1:
+                        # Gol nel secondo tempo, non tracciare
+                        minute_str = f"minuto rilevato: {minute}'" if minute is not None else "minuto non disponibile"
+                        print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - gol nel secondo tempo ({minute_str})")
+                        sys.stdout.flush()
+                        continue
+                    # Se period == 1, siamo nel primo tempo (anche con recupero), traccia
+                elif minute is not None:
+                    # Se period non disponibile, usa il minuto come fallback conservativo
+                    if minute > 45:
+                        # Probabilmente nel secondo tempo, non tracciare
+                        print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - probabilmente nel secondo tempo (minuto {minute}')")
+                        sys.stdout.flush()
+                        continue
+                    # Se minute <= 45, assumiamo primo tempo
+                
+                # Il gol è nel primo tempo, traccia la partita
+                # Prova a recuperare il minuto esatto (opzionale)
+                first_goal_minute = None
+                reliability = 3  # Attendibilità media di default
+                
+                if event_id:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "application/json",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": "https://www.sofascore.com/",
+                        "Origin": "https://www.sofascore.com"
+                    }
+                    first_goal_minute, reliability = get_match_goal_minute(event_id, score_home, score_away, headers, goal_number=1)
+                    if first_goal_minute is None or first_goal_minute == 0:
+                        first_goal_minute = None  # Non disponibile
+                        reliability = 2  # Attendibilità più bassa senza minuto esatto
+                
+                # Traccia la partita (anche senza minuto esatto)
+                active_matches[match_id] = {
+                    "home": home,
+                    "away": away,
+                    "league": league,
+                    "country": country,
+                    "first_goal_time": now,
+                    "first_score": first_score,
+                    "first_goal_minute": first_goal_minute if first_goal_minute else 0,  # 0 = N/A
+                    "first_goal_period": period if period else 1,
+                    "first_goal_reliability": reliability,
+                    "event_id": event_id
+                }
+                
+                if first_goal_minute:
+                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} ({first_score}) al minuto {first_goal_minute}' (recuperato dall'API)")
+                else:
+                    minute_str = f"minuto corrente: {minute}'" if minute is not None else "minuto non disponibile"
+                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} ({first_score}) nel primo tempo ({minute_str}, minuto primo gol N/A)")
                 sys.stdout.flush()
         
         # CASO 2: Partita già tracciata (1-0/0-1) che diventa 1-1 (secondo gol appena segnato!)
@@ -918,15 +990,15 @@ def process_matches():
                 
                 second_period = match.get("period")  # Metà tempo corrente
                 
-                # Se non abbiamo minuti, non notificare
-                if first_min == 0 or second_min == 0:
+                # Se non abbiamo il minuto del secondo gol, non notificare
+                if second_min == 0:
                     now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                    print(f"[{now_utc}] ⚠️ Notifica NON inviata: {home} - {away} ({first_score} → 1-1) - minuti non disponibili (first_min={first_min}, second_min={second_min})")
+                    print(f"[{now_utc}] ⚠️ Notifica NON inviata: {home} - {away} ({first_score} → 1-1) - minuto secondo gol non disponibile (second_min={second_min})")
                     sys.stdout.flush()
                     del active_matches[match_id]
                     continue
                 
-                # NUOVA LOGICA: Controlla che l'1-1 sia entro il 55' minuto (non più 10 minuti di gioco)
+                # NUOVA LOGICA: Controlla che l'1-1 sia entro il 55' minuto
                 if second_min <= 55:
                     # Calcola attendibilità combinata (minimo tra i due)
                     first_reliability = match_data.get("first_goal_reliability", 0)
