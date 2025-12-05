@@ -98,6 +98,23 @@ def get_match_id(home, away, league):
     return f"{home}_{away}_{league}".lower().replace(" ", "_")
 
 
+def format_period_info(period, minute):
+    """Formatta informazioni sul periodo per i log"""
+    if period == 1:
+        return "1° tempo"
+    elif period == 2:
+        return "2° tempo"
+    elif period:
+        return f"Periodo {period}"
+    elif minute is not None:
+        if minute <= 45:
+            return "1° tempo (stimato)"
+        else:
+            return "2° tempo (stimato)"
+    else:
+        return "Periodo sconosciuto"
+
+
 def _fetch_sofascore_json(url, headers):
     """Tenta fetch diretto; su 403 usa fallback r.jina.ai come proxy pubblico."""
     now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
@@ -867,7 +884,8 @@ def process_matches():
                             # Gol nel secondo tempo, non tracciare
                             del active_matches[match_id]
                             now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                            print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol nel secondo tempo")
+                            period_info = format_period_info(period, minute)
+                            print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol nel {period_info}")
                             sys.stdout.flush()
                             continue
                         # Se period == 1, siamo nel primo tempo (anche con recupero), OK
@@ -875,7 +893,8 @@ def process_matches():
                         # Se period non disponibile, usa il minuto come fallback conservativo
                         del active_matches[match_id]
                         now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                        print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - probabilmente nel secondo tempo (minuto {minute}')")
+                        period_info = format_period_info(period, minute)
+                        print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - probabilmente nel {period_info} (minuto {minute}')")
                         sys.stdout.flush()
                         continue
                     
@@ -899,7 +918,8 @@ def process_matches():
                         "event_id": match.get("event_id")
                     }
                     now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} (0-0 → {first_score}) al minuto {goal_minute}' - ESATTO (rilevato al momento)")
+                    period_info = format_period_info(period, minute)
+                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} (0-0 → {first_score}) al minuto {goal_minute}' [{period_info}] - ESATTO (rilevato al momento)")
                     sys.stdout.flush()
             elif match_id not in active_matches:
                 # Partita già 1-0/0-1 quando viene rilevata (non era tracciata come 0-0)
@@ -915,7 +935,8 @@ def process_matches():
                     if period > 1:
                         # Gol nel secondo tempo, non tracciare
                         minute_str = f"minuto rilevato: {minute}'" if minute is not None else "minuto non disponibile"
-                        print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - gol nel secondo tempo ({minute_str})")
+                        period_info = format_period_info(period, minute)
+                        print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - gol nel {period_info} ({minute_str})")
                         sys.stdout.flush()
                         continue
                     # Se period == 1, siamo nel primo tempo (anche con recupero), traccia
@@ -923,7 +944,8 @@ def process_matches():
                     # Se period non disponibile, usa il minuto come fallback conservativo
                     if minute > 45:
                         # Probabilmente nel secondo tempo, non tracciare
-                        print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - probabilmente nel secondo tempo (minuto {minute}')")
+                        period_info = format_period_info(period, minute)
+                        print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - probabilmente nel {period_info} (minuto {minute}')")
                         sys.stdout.flush()
                         continue
                     # Se minute <= 45, assumiamo primo tempo
@@ -960,11 +982,12 @@ def process_matches():
                     "event_id": event_id
                 }
                 
+                period_info = format_period_info(period, minute)
                 if first_goal_minute:
-                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} ({first_score}) al minuto {first_goal_minute}' (recuperato dall'API)")
+                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} ({first_score}) al minuto {first_goal_minute}' [{period_info}] (recuperato dall'API)")
                 else:
                     minute_str = f"minuto corrente: {minute}'" if minute is not None else "minuto non disponibile"
-                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} ({first_score}) nel primo tempo ({minute_str}, minuto primo gol N/A)")
+                    print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} ({first_score}) [{period_info}] ({minute_str}, minuto primo gol N/A)")
                 sys.stdout.flush()
         
         # CASO 2: Partita già tracciata (1-0/0-1) che diventa 1-1 (secondo gol appena segnato!)
@@ -1021,13 +1044,16 @@ def process_matches():
                     del active_matches[match_id]
                     # Entrambi i minuti sono esatti perché rilevati al momento (0-0 → 1-0/0-1 e 1-0/0-1 → 1-1)
                     now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                    print(f"[{now_utc}] ✅ Notifica inviata: {home} - {away} ({first_score} al {first_min}' [ESATTO] → 1-1 al {second_min}' [ESATTO]) - entro il 55' minuto (attendibilità {combined_reliability}/5)")
+                    second_period_info = format_period_info(second_period, second_min)
+                    first_min_str = f"{first_min}'" if first_min and first_min > 0 else "N/A"
+                    print(f"[{now_utc}] ✅ Notifica inviata: {home} - {away} ({first_score} al {first_min_str} → 1-1 al {second_min}' [{second_period_info}]) - entro il 55' minuto (attendibilità {combined_reliability}/5)")
                     sys.stdout.flush()
                 else:
                     # Scaduta (oltre il 55' minuto), rimuovi dal tracking
                     del active_matches[match_id]
                     now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                    print(f"[{now_utc}] ⚠️ Partita scaduta (oltre il 55' minuto): {home} - {away} (1-1 al {second_min}')")
+                    second_period_info = format_period_info(second_period, second_min)
+                    print(f"[{now_utc}] ⚠️ Partita scaduta (oltre il 55' minuto): {home} - {away} (1-1 al {second_min}' [{second_period_info}])")
                     sys.stdout.flush()
         
         # CASO 3: Partita tracciata che cambia punteggio in modo non interessante
@@ -1055,7 +1081,8 @@ def process_matches():
                     # Primo gol nel primo tempo, e ora c'è un altro gol sempre nel primo tempo
                     del active_matches[match_id]
                     now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-                    print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era {match_data.get('first_score')}, ora {score_home}-{score_away}) - altro gol nel primo tempo")
+                    period_info = format_period_info(period, minute)
+                    print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era {match_data.get('first_score')}, ora {score_home}-{score_away}) - altro gol nel {period_info}")
                     sys.stdout.flush()
                 elif score_home != 1 or score_away != 1:
                     # Non è più 1-1 e non è più 1-0/0-1, rimuovila
