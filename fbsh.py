@@ -1011,16 +1011,18 @@ daily_notifications = defaultdict(int)
 def cmd_start(update, context):
     """Messaggio di benvenuto"""
     welcome_text = (
-        "👋 Benvenuto in QrGolBot!\n\n"
-        "⚽ Bot per notifiche 1-1 Live\n\n"
+        "👋 Benvenuto in FBSH Bot!\n\n"
+        "⚽ Bot per notifiche GOL FBSH\n\n"
         "Il bot monitora tutte le partite live da SofaScore e ti avvisa quando:\n"
         "• Una partita è 0-0 nel primo tempo\n"
         "• Diventa 1-0 o 0-1 nel primo tempo\n"
         "• Il primo tempo finisce 1-0 o 0-1\n"
-        "• Diventa 1-1 entro il 55' minuto\n\n"
+        "• Diventa 1-1 entro il 55' minuto\n"
+        "• Invia notifica con '⚽ GOL FBSH'\n\n"
         "📋 Usa /help per vedere tutti i comandi disponibili\n"
         "🔍 Usa /live per vedere le partite live rilevanti\n"
-        "📊 Usa /status per lo stato del bot"
+        "📊 Usa /status per lo stato del bot\n"
+        "🆔 Usa /chatid per ottenere l'ID della chat"
     )
     update.effective_message.reply_text(welcome_text)
 
@@ -1033,14 +1035,15 @@ def cmd_ping(update, context):
 def cmd_help(update, context):
     """Mostra guida dettagliata"""
     help_text = (
-        "⚽ QrGolBot - Notifiche 1-1 Live\n\n"
-        "Cosa fa: Monitora tutte le partite live (SofaScore) e invia notifiche "
-        "quando il punteggio diventa 1-1 con questi criteri:\n"
-        "• Traccia partite 0-0 fino alla fine del primo tempo\n"
-        "• Diventa 1-0 o 0-1 nel primo tempo\n"
-        "• Il primo tempo deve finire 1-0 o 0-1\n"
-        "• Diventa 1-1 entro il 55' minuto\n"
-        "• Notifica con 'GOL FBSH'\n\n"
+        "⚽ FBSH Bot - Notifiche GOL FBSH\n\n"
+        "📖 Come funziona:\n"
+        "Il bot monitora tutte le partite live da SofaScore e invia notifiche "
+        "quando viene rilevato il pattern FBSH:\n\n"
+        "1️⃣ Traccia partite 0-0 durante il primo tempo\n"
+        "2️⃣ Se diventano 1-0 o 0-1 nel primo tempo, continua a tracciarle\n"
+        "3️⃣ Verifica che il primo tempo finisca 1-0 o 0-1\n"
+        "4️⃣ Se la partita diventa 1-1 entro il 55' minuto, invia notifica\n"
+        "5️⃣ Il messaggio include link diretto alla partita su SofaScore\n\n"
         "📋 Comandi disponibili:\n"
         "/start - Messaggio di benvenuto\n"
         "/ping - Verifica se il bot è attivo\n"
@@ -1056,7 +1059,8 @@ def cmd_help(update, context):
         "/excel - Scarica Excel completo con risultati e minuti\n"
         "/logs - Mostra ultimi log del bot\n"
         "/clear - Pulisce partite in tracking\n"
-        "/reset - Resetta tutte le partite notificate"
+        "/reset - Resetta tutte le partite notificate\n\n"
+        "💡 Tip: Usa /chatid per ottenere l'ID della chat del gruppo"
     )
     update.effective_message.reply_text(help_text)
 
