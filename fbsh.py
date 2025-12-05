@@ -13,7 +13,7 @@ from io import BytesIO
 import os
 import re
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from telegram import Bot
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 from telegram.error import Conflict, NetworkError
@@ -100,7 +100,7 @@ def get_match_id(home, away, league):
 
 def _fetch_sofascore_json(url, headers):
     """Tenta fetch diretto; su 403 usa fallback r.jina.ai come proxy pubblico."""
-    now_utc = datetime.utcnow().isoformat() + "Z"
+    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code == 200:
@@ -183,7 +183,7 @@ def scrape_sofascore():
             f"{SOFASCORE_PROXY_BASE}/sport/football/livescore",
         ]
         
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         events = []
         for idx, url in enumerate(endpoints, start=1):
             print(f"[{now_utc}] Richiesta API SofaScore: {url}... (tentativo {idx})")
@@ -339,12 +339,12 @@ def scrape_sofascore():
         return matches
     
     except requests.exceptions.RequestException as e:
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         print(f"[{now_utc}] Errore nella richiesta API SofaScore: {e}")
         sys.stdout.flush()
         return []
     except Exception as e:
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         print(f"[{now_utc}] Errore nello scraping SofaScore: {e}")
         sys.stdout.flush()
         return []
@@ -368,7 +368,7 @@ def get_match_goal_minute(event_id, score_home, score_away, headers, goal_number
         # Endpoint per eventi/incidents della partita
         url = f"{SOFASCORE_PROXY_BASE}/event/{event_id}/incidents"
         
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         data = _fetch_sofascore_json(url, headers)
         
         if not data:
@@ -402,7 +402,7 @@ def get_match_goal_minute(event_id, score_home, score_away, headers, goal_number
                         })
         
         if not goals:
-            now_utc = datetime.utcnow().isoformat() + "Z"
+            now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
             print(f"[{now_utc}] ⚠️ Nessun gol trovato negli incidents per event_id={event_id}")
             sys.stdout.flush()
             return None, 0
@@ -425,7 +425,7 @@ def get_match_goal_minute(event_id, score_home, score_away, headers, goal_number
                 selected_goal = goals[1]
                 goal_desc = "secondo"
             else:
-                now_utc = datetime.utcnow().isoformat() + "Z"
+                now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                 print(f"[{now_utc}] ⚠️ Secondo gol non trovato (solo {len(goals)} gol disponibili) per event_id={event_id}")
                 sys.stdout.flush()
                 return None, 0
@@ -434,13 +434,13 @@ def get_match_goal_minute(event_id, score_home, score_away, headers, goal_number
             return None, 0
         
         goal_minute = selected_goal["minute"]
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         print(f"[{now_utc}] ✅ Minuto ESATTO recuperato dall'API: {goal_desc} gol al minuto {goal_minute}' (event_id={event_id}, totale gol={len(goals)})")
         sys.stdout.flush()
         
         return goal_minute, 5  # Attendibilità massima perché è il minuto esatto dall'API
     except Exception as e:
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         print(f"[{now_utc}] ⚠️ Errore recupero minuto gol da eventi: {e}")
         sys.stdout.flush()
         return None, 0
@@ -542,7 +542,7 @@ def get_scores_from_incidents(event_id, headers):
         # Prova prima a recuperare dal dettaglio evento (più affidabile per partite finite)
         try:
             url = f"{SOFASCORE_PROXY_BASE}/event/{event_id}"
-            now_utc = datetime.utcnow().isoformat() + "Z"
+            now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
             print(f"[{now_utc}] 🔍 DEBUG: Chiamata API /event/{event_id} per recuperare risultati")
             sys.stdout.flush()
             
@@ -594,13 +594,13 @@ def get_scores_from_incidents(event_id, headers):
                 print(f"[{now_utc}] ⚠️ DEBUG: event_data è None o vuoto")
                 sys.stdout.flush()
         except Exception as e:
-            now_utc = datetime.utcnow().isoformat() + "Z"
+            now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
             print(f"[{now_utc}] ⚠️ DEBUG: Errore recupero da /event/{event_id}: {e}")
             sys.stdout.flush()
             pass  # Fallback agli incidents
         
         # Fallback: calcola dai incidents
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         print(f"[{now_utc}] 🔍 DEBUG: Fallback a /incidents per event_id {event_id}")
         sys.stdout.flush()
         
@@ -660,7 +660,7 @@ def get_scores_from_incidents(event_id, headers):
         return result_1h, result_2h
     except Exception as e:
         # Log errore per debug
-        now_utc = datetime.utcnow().isoformat() + "Z"
+        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         print(f"[{now_utc}] ⚠️ Errore recupero risultati per event_id {event_id}: {e}")
         sys.stdout.flush()
         return "", ""
@@ -720,13 +720,13 @@ def update_results_for_sent_matches(sent_matches, current_matches_dict):
         
         if need_halftime and r1:
             match_data["result_1H"] = r1
-            now_utc = datetime.utcnow().isoformat() + "Z"
+            now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
             print(f"[{now_utc}] ✅ Risultato 1H salvato per {match_id}: {r1}")
             sys.stdout.flush()
         
         if need_final and r2:
             match_data["result_2H"] = r2
-            now_utc = datetime.utcnow().isoformat() + "Z"
+            now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
             print(f"[{now_utc}] ✅ Risultato finale salvato per {match_id}: {r2}")
             sys.stdout.flush()
 
@@ -794,7 +794,7 @@ def process_matches():
                 if result_1h not in ["1-0", "0-1"]:
                     # Il primo tempo non è finito 1-0/0-1, rimuovi
                     matches_to_remove.append(match_id)
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ⚠️ Partita rimossa: {match_data.get('home')} - {match_data.get('away')} - primo tempo finito {result_1h} (non 1-0/0-1)")
                     sys.stdout.flush()
     
@@ -851,7 +851,7 @@ def process_matches():
                     if period and period > 1:
                         # Gol nel secondo tempo, non tracciare
                         del active_matches[match_id]
-                        now_utc = datetime.utcnow().isoformat() + "Z"
+                        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                         print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol nel secondo tempo")
                         sys.stdout.flush()
                         continue
@@ -859,7 +859,7 @@ def process_matches():
                     if minute is not None and minute > 45:
                         # Gol dopo il 45', non tracciare
                         del active_matches[match_id]
-                        now_utc = datetime.utcnow().isoformat() + "Z"
+                        now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                         print(f"[{now_utc}] ⚠️ Partita rimossa: {home} - {away} ({first_score}) - gol dopo il 45'")
                         sys.stdout.flush()
                         continue
@@ -883,13 +883,13 @@ def process_matches():
                         "first_goal_reliability": match.get("reliability", 4),  # Attendibilità alta perché rilevato al momento
                         "event_id": match.get("event_id")
                     }
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ✅ Partita tracciata: {home} - {away} (0-0 → {first_score}) al minuto {goal_minute}' - ESATTO (rilevato al momento)")
                     sys.stdout.flush()
             elif match_id not in active_matches:
                 # Partita già 1-0/0-1 quando viene rilevata (non era tracciata come 0-0)
                 # Non possiamo sapere il minuto esatto, quindi non tracciarla
-                now_utc = datetime.utcnow().isoformat() + "Z"
+                now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                 first_score = "1-0" if score_home == 1 else "0-1"
                 print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - già in corso quando rilevata (minuto esatto non disponibile)")
                 sys.stdout.flush()
@@ -919,7 +919,7 @@ def process_matches():
                 
                 # Se non abbiamo minuti, non notificare
                 if first_min == 0 or second_min == 0:
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ⚠️ Notifica NON inviata: {home} - {away} ({first_score} → 1-1) - minuti non disponibili (first_min={first_min}, second_min={second_min})")
                     sys.stdout.flush()
                     del active_matches[match_id]
@@ -947,13 +947,13 @@ def process_matches():
                     }
                     del active_matches[match_id]
                     # Entrambi i minuti sono esatti perché rilevati al momento (0-0 → 1-0/0-1 e 1-0/0-1 → 1-1)
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ✅ Notifica inviata: {home} - {away} ({first_score} al {first_min}' [ESATTO] → 1-1 al {second_min}' [ESATTO]) - entro il 55' minuto (attendibilità {combined_reliability}/5)")
                     sys.stdout.flush()
                 else:
                     # Scaduta (oltre il 55' minuto), rimuovi dal tracking
                     del active_matches[match_id]
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ⚠️ Partita scaduta (oltre il 55' minuto): {home} - {away} (1-1 al {second_min}')")
                     sys.stdout.flush()
         
@@ -970,7 +970,7 @@ def process_matches():
                 if period == 1 or (minute is not None and minute <= 45):
                     # Era 0-0, ora è cambiata ma non è 1-0/0-1 (es. 2-0, 0-2, 1-1, ecc.) nel primo tempo
                     del active_matches[match_id]
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era 0-0, ora {score_home}-{score_away}) - altro gol nel primo tempo")
                     sys.stdout.flush()
             # Se era 1-0/0-1 e ora non è più 1-0/0-1 e non è 1-1, rimuovila
@@ -981,13 +981,13 @@ def process_matches():
                 if first_period == 1 and (period == 1 or (minute is not None and minute <= 45)):
                     # Primo gol nel primo tempo, e ora c'è un altro gol sempre nel primo tempo
                     del active_matches[match_id]
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era {match_data.get('first_score')}, ora {score_home}-{score_away}) - altro gol nel primo tempo")
                     sys.stdout.flush()
                 elif score_home != 1 or score_away != 1:
                     # Non è più 1-1 e non è più 1-0/0-1, rimuovila
                     del active_matches[match_id]
-                    now_utc = datetime.utcnow().isoformat() + "Z"
+                    now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                     print(f"[{now_utc}] ⚠️ Partita rimossa dal tracking: {home} - {away} (era {match_data.get('first_score')}, ora {score_home}-{score_away})")
                     sys.stdout.flush()
     
@@ -1767,13 +1767,13 @@ def main():
     while True:
         try:
             last_check_started_at = datetime.now()
-            cycle_start_utc = datetime.utcnow().isoformat() + "Z"
-            print(f"[${cycle_start_utc}] ▶️ Inizio ciclo controllo partite")
+            cycle_start_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
+            print(f"[{cycle_start_utc}] ▶️ Inizio ciclo controllo partite")
             sys.stdout.flush()
             last_check_error = None
             process_matches()
             last_check_finished_at = datetime.now()
-            cycle_end_utc = datetime.utcnow().isoformat() + "Z"
+            cycle_end_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
             print(f"[${cycle_end_utc}] ⏹️ Fine ciclo controllo partite")
             sys.stdout.flush()
         except Exception as e:
