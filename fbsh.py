@@ -446,26 +446,30 @@ def get_match_goal_minute(event_id, score_home, score_away, headers, goal_number
         return None, 0
 
 
-def send_message(home, away, league, country, first_score, first_min, second_score, second_min, reliability=0):
+def send_message(home, away, league, country, first_score, first_min, second_score, second_min, event_id=None, reliability=0):
     """Invia messaggio Telegram con i dettagli del pattern 1-1"""
     global total_notifications_sent
     
-    # Emoji per attendibilità
-    reliability_emoji = ["❌", "⚠️", "⚠️", "✅", "✅", "✅✅"]
-    reliability_text = ["Nessun dato", "Basso", "Medio", "Buono", "Alto", "Massimo"]
-    reliability_idx = min(reliability, 5)
-
-    header = f"{reliability_emoji[reliability_idx]} {home} - {away} ({league} - {country})"
-    reliability_str = f"Attendibilità: {reliability}/5 ({reliability_text[reliability_idx]})"
-
-    text = (
-        f"{header}\n"
-        f"{reliability_str}\n"
-        f"{first_score} ; {first_min}'\n"
-        f"{second_score} ; {second_min}'\n"
-        f"⚽ GOL FBSH"
-    )
-    bot.send_message(chat_id=CHAT_ID, text=text)
+    # Costruisci link SofaScore
+    match_url = f"https://www.sofascore.com/event/{event_id}" if event_id else ""
+    
+    # Formatta paese/lega
+    league_str = f"{league}"
+    if country and country != "Unknown":
+        league_str += f" - {country}"
+    
+    # Costruisci messaggio
+    message = f"⚽ GOL FBSH\n\n"
+    message += f"🏠 {home}\n"
+    message += f"🆚 {away}\n"
+    message += f"📊 {league_str}\n"
+    message += f"⏱️ Minuto {first_score} ; {first_min}'\n"
+    message += f"⏱️ Minuto {second_score} ; {second_min}'\n"
+    
+    if match_url:
+        message += f"\n🔗 {match_url}"
+    
+    bot.send_message(chat_id=CHAT_ID, text=message)
     
     # Aggiorna statistiche
     total_notifications_sent += 1
@@ -927,7 +931,7 @@ def process_matches():
                     first_reliability = match_data.get("first_goal_reliability", 0)
                     combined_reliability = min(first_reliability, second_goal_reliability)
                     
-                    send_message(home, away, league, country, first_score, first_min, "1-1", second_min, combined_reliability)
+                    send_message(home, away, league, country, first_score, first_min, "1-1", second_min, match.get("event_id"), combined_reliability)
                     # Salva dettagli della partita notificata
                     sent_matches[match_id] = {
                         "home": home,
@@ -1371,25 +1375,48 @@ def cmd_stats(update, context):
 
 def cmd_chatid(update, context):
     """Mostra l'ID della chat corrente"""
-    chat = update.effective_chat
-    message = (
-        f"📱 Informazioni Chat:\n\n"
-        f"🆔 Chat ID: `{chat.id}`\n"
-        f"📝 Tipo: {chat.type}\n"
-    )
-    
-    if chat.title:
-        message += f"📌 Titolo: {chat.title}\n"
-    if chat.username:
-        message += f"👤 Username: @{chat.username}\n"
-    if chat.first_name:
-        message += f"👤 Nome: {chat.first_name}\n"
-    if chat.last_name:
-        message += f"👤 Cognome: {chat.last_name}\n"
-    
-    message += f"\n💡 Usa questo ID nella variabile d'ambiente CHAT_ID"
-    
-    update.effective_message.reply_text(message, parse_mode='Markdown')
+    try:
+        chat = update.effective_chat
+        user = update.effective_user
+        
+        message = f"📱 Informazioni Chat:\n\n"
+        message += f"🆔 Chat ID: `{chat.id}`\n"
+        message += f"📝 Tipo: {chat.type}\n"
+        
+        if chat.title:
+            message += f"📌 Titolo: {chat.title}\n"
+        if chat.username:
+            message += f"👤 Username Chat: @{chat.username}\n"
+        if chat.first_name:
+            message += f"👤 Nome Chat: {chat.first_name}\n"
+        if chat.last_name:
+            message += f"👤 Cognome Chat: {chat.last_name}\n"
+        
+        if user:
+            message += f"\n👤 User Info:\n"
+            message += f"🆔 User ID: `{user.id}`\n"
+            if user.username:
+                message += f"👤 Username: @{user.username}\n"
+            if user.first_name:
+                message += f"👤 Nome: {user.first_name}\n"
+        
+        message += f"\n💡 Usa questo Chat ID nella variabile d'ambiente CHAT_ID:\n"
+        message += f"`{chat.id}`"
+        
+        update.effective_message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        # Fallback senza Markdown se c'è un errore
+        try:
+            chat = update.effective_chat
+            message = f"📱 Informazioni Chat:\n\n"
+            message += f"🆔 Chat ID: {chat.id}\n"
+            message += f"📝 Tipo: {chat.type}\n"
+            if chat.title:
+                message += f"📌 Titolo: {chat.title}\n"
+            message += f"\n💡 Usa questo Chat ID nella variabile d'ambiente CHAT_ID: {chat.id}"
+            update.effective_message.reply_text(message)
+        except Exception as e2:
+            update.effective_message.reply_text(f"Errore nel recupero informazioni chat: {e2}")
 
 
 def cmd_info(update, context):
