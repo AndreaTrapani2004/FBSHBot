@@ -891,7 +891,8 @@ def process_matches():
                 # Non possiamo sapere il minuto esatto, quindi non tracciarla
                 now_utc = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
                 first_score = "1-0" if score_home == 1 else "0-1"
-                print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - già in corso quando rilevata (minuto esatto non disponibile)")
+                minute_str = f"minuto rilevato: {minute}'" if minute is not None else "minuto non disponibile"
+                print(f"[{now_utc}] ⚠️ Partita NON tracciata: {home} - {away} ({first_score}) - già in corso quando rilevata ({minute_str}, minuto esatto non disponibile)")
                 sys.stdout.flush()
         
         # CASO 2: Partita già tracciata (1-0/0-1) che diventa 1-1 (secondo gol appena segnato!)
